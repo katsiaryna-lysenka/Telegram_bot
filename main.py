@@ -85,7 +85,6 @@ async def process_name(message: Message, state: FSMContext):
         reply_markup=ReplyKeyboardRemove(),
     )
 
-
 # Обработчик ввода ссылки на категорию
 @form_router.message(UserState.waiting_for_category)
 async def process_category(message: types.Message, state: FSMContext):
