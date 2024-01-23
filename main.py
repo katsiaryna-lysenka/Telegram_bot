@@ -13,6 +13,7 @@ import aiohttp
 from os import getenv
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
+from pydantic import json
 from sqlalchemy import create_engine, Column, Integer, String, Sequence, select
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
@@ -101,62 +102,75 @@ async def process_name(message: Message, state: FSMContext):
 
 @form_router.message()
 async def process_category(message: Message, state: FSMContext):
-    print(f'1')
     user_id = message.from_user.id
-    print(f"2")
 
     try:
-        # Используйте async with для работы с асинхронной сессией
         async with get_session() as user_session:
-            # Используем select для асинхронного запроса
+
+            # Создаем пользователя и добавляем в базу данных
+            user = User(username=f"user_{user_id}")
+            user_session.add(user)
+            await user_session.commit()
+
+            # Теперь получаем пользователя по ID
             stmt = select(User).where(User.id == user_id)
             result = await user_session.execute(stmt)
             user = result.scalar()
 
             print(f"user: {user}")
 
-            if user:
-                category_link = message.text
-                await message.answer("Пожалуйста, ожидайте завершения парсинга. Это может занять некоторое время.")
-                await parse_category(user.id, category_link)
-                await message.answer("Парсинг завершен. Результаты сохранены в файле products.csv.")
-            else:
-                print(f"User with id {user_id} not found or in an invalid state.")
-                await message.answer("Что-то пошло не так. Пожалуйста, начните снова с команды /start.")
+            category_link = message.text
+            await message.answer("Пожалуйста, ожидайте завершения парсинга. Это может занять некоторое время.")
+            await parse_category(user.id if user else None, category_link)
+            await message.answer("Парсинг завершен. Результаты сохранены в файле products.csv.")
+
     except Exception as e:
         print(f"Exception: {e}")
-
 
 
 async def parse_category(user_id, category_link):
     try:
         async with aiohttp.ClientSession() as session:
+            print('1')
             async with session.get(category_link) as response:
+                print('2')
                 category_html = await response.text()
+                print('3')
                 category_soup = BeautifulSoup(category_html, 'html.parser')
+                print('4')
 
                 products = []
+                print('5')
 
-                for product_tag in category_soup.find_all('li', class_='col-xs-6 col-sm-4 col-md-3 col-lg-3'):
-                    product_link = product_tag.find('h3').a['href']
+                for product_tag in category_soup.find_all(class_='col-xs-6 col-sm-4 col-md-3 col-lg-3'):
+                    print('6')
+                    product_link = "https://books.toscrape.com/catalogue/" + product_tag.find('h3').a['href'].replace('../', '')
+                    print('7')
                     product_name = product_tag.find('h3').a['title']
+                    print('8')
 
-                    async with session.get(f'https://books.toscrape.com/catalogue/{product_link}') as product_page:
+                    async with session.get(product_link) as product_page:
                         product_html = await product_page.text()
                         product_soup = BeautifulSoup(product_html, 'html.parser')
 
-                    price = product_soup.find('p', class_='price_color').text
-                    availability = product_soup.find('p', class_='instock availability').text.strip()
-                    info = product_soup.find('meta', {'name': 'description'})['content']
+                    price_tag = product_soup.find('p', class_='price_color')
+                    availability_tag = product_soup.find('p', class_='instock availability')
 
-                    product = Product(name=product_name, price=price, link=product_link, availability=availability,
-                                      info=info)
+                    price = price_tag.text.strip() if price_tag else 'N/A'
+                    availability = availability_tag.text.strip().split()[2] if availability_tag else 'N/A'
+
+                    info = product_soup.find('div', {'id': 'product_description'}).next_sibling.next_sibling.text.strip()
+
+                    product = Product(name=product_name, price=price, link=product_link, availability=availability, info=info, user_id=user_id)
                     products.append(product)
 
-        await save_to_csv(products)
+                await save_to_csv(products)
 
     except Exception as e:
         print(f"Error during parsing: {e}")
+
+
+
 
 async def save_to_csv(products):
     with open('products.csv', 'w', newline='', encoding='utf-8') as file:
