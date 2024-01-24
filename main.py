@@ -2,30 +2,21 @@ import logging
 import sys
 import asyncio
 import csv
-from contextlib import contextmanager, asynccontextmanager
-
-from aiogram import Bot, Dispatcher, types, Router, html
-from aiogram.client import bot
-from aiogram.filters import Command, CommandStart
+from contextlib import asynccontextmanager
+from aiogram import Bot, Dispatcher
+from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 import aiohttp
-from os import getenv
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from pydantic import json
-from sqlalchemy import create_engine, Column, Integer, String, Sequence, select
+from sqlalchemy import Column, Integer, String, Sequence, select
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from bs4 import BeautifulSoup
-from aiogram.types import (
-    KeyboardButton,
-    Message,
-    ReplyKeyboardMarkup,
-    ReplyKeyboardRemove,
-)
+from aiogram.types import Message, ReplyKeyboardRemove
 
-# Установите свой токен бота
+
 TOKEN = "6597211233:AAGstMTkO1le_rD1JFlfX6kPF-4jlDlxMLg"
 DATABASE_URL = 'sqlite+aiosqlite:///site_parser.db'
 engine = create_async_engine(DATABASE_URL, echo=False, future=True)
@@ -47,6 +38,18 @@ class Product(Base):
     link = Column(String(255), nullable=False)
     availability = Column(String(50), nullable=False)
     info = Column(String(255), nullable=False)
+    user_id = Column(Integer, nullable=True)
+
+    def __init__(self, name, price, link, availability, info, user_id):
+        self.name = name
+        self.price = price
+        self.link = link
+        self.availability = availability
+        self.info = info
+        self.user_id = user_id
+
+    def __repr__(self):
+        return f"<Product(name={self.name}, price={self.price}, link={self.link}, availability={self.availability}, info={self.info}, user_id={self.user_id})>"
 
 
 async def create_tables():
@@ -60,7 +63,6 @@ class UserState(StatesGroup):
     waiting_the_answer = State()
 
 
-form_router = Router()
 storage = MemoryStorage()
 dp = Dispatcher()
 
@@ -78,8 +80,7 @@ async def get_session():
         await async_session.close()
 
 
-# Обработчик команды /start
-@form_router.message(CommandStart())
+@dp.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
     await state.set_state(UserState.waiting_for_name)
     await message.answer(
@@ -88,7 +89,7 @@ async def cmd_start(message: Message, state: FSMContext):
     )
 
 
-@form_router.message(UserState.waiting_for_name)
+@dp.message(UserState.waiting_for_name)
 async def process_name(message: Message, state: FSMContext):
     await state.set_state(UserState.waiting_for_category)
     user_name = message.text
@@ -100,7 +101,8 @@ async def process_name(message: Message, state: FSMContext):
         reply_markup=ReplyKeyboardRemove(),
     )
 
-@form_router.message()
+
+@dp.message()
 async def process_category(message: Message, state: FSMContext):
     user_id = message.from_user.id
 
@@ -128,26 +130,19 @@ async def process_category(message: Message, state: FSMContext):
         print(f"Exception: {e}")
 
 
+@dp.message()
 async def parse_category(user_id, category_link):
     try:
         async with aiohttp.ClientSession() as session:
-            print('1')
             async with session.get(category_link) as response:
-                print('2')
                 category_html = await response.text()
-                print('3')
                 category_soup = BeautifulSoup(category_html, 'html.parser')
-                print('4')
 
                 products = []
-                print('5')
 
                 for product_tag in category_soup.find_all(class_='col-xs-6 col-sm-4 col-md-3 col-lg-3'):
-                    print('6')
                     product_link = "https://books.toscrape.com/catalogue/" + product_tag.find('h3').a['href'].replace('../', '')
-                    print('7')
                     product_name = product_tag.find('h3').a['title']
-                    print('8')
 
                     async with session.get(product_link) as product_page:
                         product_html = await product_page.text()
@@ -157,11 +152,13 @@ async def parse_category(user_id, category_link):
                     availability_tag = product_soup.find('p', class_='instock availability')
 
                     price = price_tag.text.strip() if price_tag else 'N/A'
-                    availability = availability_tag.text.strip().split()[2] if availability_tag else 'N/A'
+                    availability = availability_tag.text.strip().split()[2].lstrip("(") if availability_tag else 'N/A'
 
-                    info = product_soup.find('div', {'id': 'product_description'}).next_sibling.next_sibling.text.strip()
+                    info = product_soup.find('div',
+                                             {'id': 'product_description'}).next_sibling.next_sibling.text.strip()
 
-                    product = Product(name=product_name, price=price, link=product_link, availability=availability, info=info, user_id=user_id)
+                    product = Product(name=product_name, price=price, link=product_link, availability=availability,
+                                      info=info, user_id=user_id)
                     products.append(product)
 
                 await save_to_csv(products)
@@ -170,21 +167,19 @@ async def parse_category(user_id, category_link):
         print(f"Error during parsing: {e}")
 
 
-
-
 async def save_to_csv(products):
-    with open('products.csv', 'w', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        writer.writerow(['Название', 'Цена', 'Ссылка', 'Наличие', 'Информация'])
-        for product in products:
-            writer.writerow([product.name, product.price, product.link, product.availability, product.info])
+    try:
+        with open('products.csv', 'w', newline='', encoding='utf-8') as file:
+            writer = csv.writer(file)
+            writer.writerow(['Название', 'Цена', 'Ссылка', 'Наличие', 'Информация'])
+            for product in products:
+                writer.writerow([product.name, product.price, product.link, product.availability, product.info])
+    except Exception as e:
+        print(f"Error during saving to CSV: {e}")
 
 
 async def main():
     bot = Bot(token=TOKEN, parse_mode=ParseMode.HTML)
-    dp = Dispatcher()
-    dp.include_router(form_router)
-
     await dp.start_polling(bot)
 
 
