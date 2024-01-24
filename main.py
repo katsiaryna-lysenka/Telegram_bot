@@ -15,6 +15,7 @@ from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from bs4 import BeautifulSoup
 from aiogram.types import Message, ReplyKeyboardRemove
+from aiogram.types import FSInputFile
 
 
 TOKEN = "6597211233:AAGstMTkO1le_rD1JFlfX6kPF-4jlDlxMLg"
@@ -109,12 +110,10 @@ async def process_category(message: Message, state: FSMContext):
     try:
         async with get_session() as user_session:
 
-            # Создаем пользователя и добавляем в базу данных
             user = User(username=f"user_{user_id}")
             user_session.add(user)
             await user_session.commit()
 
-            # Теперь получаем пользователя по ID
             stmt = select(User).where(User.id == user_id)
             result = await user_session.execute(stmt)
             user = result.scalar()
@@ -124,7 +123,8 @@ async def process_category(message: Message, state: FSMContext):
             category_link = message.text
             await message.answer("Пожалуйста, ожидайте завершения парсинга. Это может занять некоторое время.")
             await parse_category(user.id if user else None, category_link)
-            await message.answer("Парсинг завершен. Результаты сохранены в файле products.csv.")
+            await message.answer_document(FSInputFile('products.csv'),
+                                          caption="Парсинг завершен. Результаты сохранены в файле products.csv.")
 
     except Exception as e:
         print(f"Exception: {e}")
